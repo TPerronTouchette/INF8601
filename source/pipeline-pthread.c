@@ -20,78 +20,67 @@ void *image_loader(void *arg) {
 	image_dir_t *image_dir = (image_dir_t *) arg;
 	while (1) {
 		image_t* image = image_dir_load_next(image_dir);
-        if (image == NULL) {
-			printf("loader has finish!\n");
-            break;
-        }
+        if (image == NULL) break;
 
 		queue_push(image_loaded_queue, image);
 	}
 
 	image_loader_finished = true;
+	queue_push(image_loaded_queue, NULL);
 	return 0;
 }
 
 void *image_scaler(void *arg) {
 	while (1) {
-		if (image_loaded_queue->used == 0 && image_loader_finished) {
-			printf("scaler has finish!\n");
-            break;
-		}
 		image_t* image = queue_pop(image_loaded_queue);
-        if (image == NULL) continue;
+        if (image == NULL && image_loader_finished) break;
+		else if (image == NULL) continue;
 
 		queue_push(image_scaled_queue, filter_scale_up(image, 2));
 		image_destroy(image);
 	}
 
 	image_scaler_finished = true;
+	queue_push(image_scaled_queue, NULL);
 	return 0;
 }
 
 void *image_sharpenner(void *arg) {
 	while (1) {
-		if (image_scaled_queue->used == 0 && image_scaler_finished) {
-			printf("sharpenner has finish!\n");
-            break;
-		}
 		image_t* image = queue_pop(image_scaled_queue);
-        if (image == NULL) continue;
+        if (image == NULL && image_scaler_finished)	break;
+		else if (image == NULL) continue;
 
 		queue_push(image_sharpenned_queue, filter_sharpen(image));
 		image_destroy(image);
 	}
 	
-	image_scaler_finished = true;
+	image_sharpenner_finished = true;
+	queue_push(image_sharpenned_queue, NULL);
 	return 0;
 }
 
 void *image_sobeller(void *arg) {
 	while (1) {
-		if (image_sharpenned_queue->used == 0 && image_sharpenner_finished) {
-			printf("sobeller has finish!\n");
-            break;
-		}
 		image_t* image = queue_pop(image_sharpenned_queue);
-        if (image == NULL) continue;
-
+        if (image == NULL && image_sharpenner_finished) break;
+		else if (image == NULL) continue;
+		
 		queue_push(image_sobelled_queue, filter_sobel(image));
 		image_destroy(image);
 	}
 	
 	image_sobeller_finished = true;
+	queue_push(image_sobelled_queue, NULL);
 	return 0;
 }
 
 void *image_saver(void *arg) {
 	image_dir_t *image_dir = (image_dir_t *) arg;
 	while (1) {
-		if (image_sobelled_queue->used == 0 && image_sobeller_finished) {
-			printf("saver has finish!\n");
-            break;
-		}
 		image_t* image = queue_pop(image_sobelled_queue);
-        if (image == NULL) continue;
+		if (image == NULL && image_sobeller_finished) break;
+		else if (image == NULL) continue;
 
 		image_dir_save(image_dir, image);
 		printf(".");
@@ -120,10 +109,11 @@ int pipeline_pthread(image_dir_t* image_dir) {
     pthread_create(&threads[2], NULL, image_sharpenner, NULL);
 	pthread_create(&threads[3], NULL, image_sobeller, NULL);
 	pthread_create(&threads[4], NULL, image_saver, image_dir);
+
 	for (int i = 0; i < 5; ++i) {
 		pthread_join(threads[i], NULL);
 	}
-	printf("end\n");
+
 	queue_destroy(image_loaded_queue);
 	queue_destroy(image_scaled_queue);
 	queue_destroy(image_sharpenned_queue);
