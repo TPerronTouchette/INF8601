@@ -4,6 +4,59 @@
 #define M_PI 3.14159265358979323846264338328
 #endif
 
+typedef struct pixel {
+    unsigned char bytes[3];
+} pixel_t;
+
+__constant const pixel_t pixel_white = {.bytes = {255, 255, 255}};
+__constant const pixel_t pixel_black = {.bytes = {0, 0, 0}};
+
+void color_value(pixel_t* pixel, float value, int interval, float interval_inverse) {
+    pixel_t pixel_value;
+
+    if (isnan(value)) {
+        pixel_value = pixel_black;
+        goto done;
+    }
+
+    int x = (((int)value % interval) * 255) * interval_inverse;
+    int i = value * interval_inverse;
+
+    switch (i) {
+    case 0:
+        pixel_value.bytes[0] = 0;
+        pixel_value.bytes[1] = x;
+        pixel_value.bytes[2] = 255;
+        break;
+    case 1:
+        pixel_value.bytes[0] = 0;
+        pixel_value.bytes[1] = 255;
+        pixel_value.bytes[2] = 255 - x;
+        break;
+    case 2:
+        pixel_value.bytes[0] = x;
+        pixel_value.bytes[1] = 255;
+        pixel_value.bytes[2] = 0;
+        break;
+    case 3:
+        pixel_value.bytes[0] = 255;
+        pixel_value.bytes[1] = 255 - x;
+        pixel_value.bytes[2] = 0;
+        break;
+    case 4:
+        pixel_value.bytes[0] = 255;
+        pixel_value.bytes[1] = 0;
+        pixel_value.bytes[2] = x;
+        break;
+    default:
+        pixel_value = pixel_white;
+        break;
+    }
+
+done:
+    *pixel = pixel_value;
+}
+
 typedef struct sinoscope_params {
     float interval_inverse;
     float time;
@@ -19,23 +72,19 @@ typedef struct sinoscope_params {
     unsigned int interval;
 } sinoscope_params_t;
 
-__constant const pixel_t pixel_black = {.bytes = {0, 0, 0}};
-
-__kernel void kernel_sinoscope(__global unsigned char* buffer, sinoscope_params_t* sinoscope) {
+__kernel void kernel_sinoscope(__global unsigned char* buffer, __global sinoscope_params_t* sinoscope) {
+    
     pixel_t pixel_value;
-
-    if (isnan(value)) {
-        pixel_value = pixel_black;
-        goto done;
-    }
-
-    float value = 0;
+    float value = 0.0;
 
     int id_x = get_global_id(0);
     int id_y = get_global_id(1);
 
-    float px = sinoscope->dx * id_x - 2 * M_PI;
-    float py = sinoscope->dy * id_y - 2 * M_PI;
+    if (id_x >= sinoscope->width || id_y >= sinoscope->height)
+        return;
+
+    float px = sinoscope->dx * id_y - 2 * M_PI;
+    float py = sinoscope->dy * id_x - 2 * M_PI;
 
     for (int k = 1; k <= sinoscope->taylor; k += 2) {
         value += sin(px * k * sinoscope->phase1 + sinoscope->time) / k;
@@ -43,15 +92,15 @@ __kernel void kernel_sinoscope(__global unsigned char* buffer, sinoscope_params_
     }
 
     value = (atan(value) - atan(-value)) / M_PI;
-    value = (value + 1) * 100;
+    value = (value + 1.0) * 100.0;
 
-    color_value(&pixel, value, sinoscope->interval, sinoscope->interval_inverse);
+    color_value(&pixel_value, value, sinoscope->interval, sinoscope->interval_inverse);
 
-    int index = (i * 3) + (j * 3) * sinoscope->width;
+    int index = 3 * (id_y * sinoscope->width + id_x);
     goto done;
 
 done:
-    sinoscope->buffer[index + 0] = pixel.bytes[0];
-    sinoscope->buffer[index + 1] = pixel.bytes[1];
-    sinoscope->buffer[index + 2] = pixel.bytes[2];
+    buffer[index + 0] = pixel_value.bytes[0];
+    buffer[index + 1] = pixel_value.bytes[1];
+    buffer[index + 2] = pixel_value.bytes[2];
 }

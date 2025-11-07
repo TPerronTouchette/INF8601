@@ -47,8 +47,6 @@ int sinoscope_opencl_init(sinoscope_opencl_t* opencl, cl_device_id opencl_device
 	char* sinoscope_code = NULL;
 	size_t sinoscope_code_len = 0;
 	opencl_load_kernel_code(&sinoscope_code, &sinoscope_code_len);
-	printf("This is the kernel code length: %zu\n", sinoscope_code_len);
-	printf("This is the code I think: %s\n", sinoscope_code);
 	cl_program program = clCreateProgramWithSource(opencl->context, 1, (const char**)&sinoscope_code,
 						 &sinoscope_code_len, &ret);
 	if (ret != CL_SUCCESS){
@@ -79,6 +77,10 @@ int sinoscope_opencl_init(sinoscope_opencl_t* opencl, cl_device_id opencl_device
 		goto fail_exit;
 	}
 
+	printf("OpenCL initialized successfully.\n");
+	printf("Using device ID: %lu\n", (unsigned long)opencl_device_id);
+	int success = (opencl != NULL);
+	printf("OpenCL initialization success: %s\n", success ? "true" : "false");
 
 	return 0;
 
@@ -110,10 +112,26 @@ void sinoscope_opencl_cleanup(sinoscope_opencl_t* opencl)
 }
 
 int sinoscope_image_opencl(sinoscope_t* sinoscope) {
-    if (sinoscope == NULL || sinoscope->opencl == NULL) {
+    if (sinoscope == NULL) {
         LOG_ERROR_NULL_PTR();
         goto fail_exit;
     }
+	// if (sinoscope->opencl == NULL) {
+    //     LOG_ERROR_NULL_PTR();
+    //     goto fail_exit;
+    // }
+
+	cl_int ret = clGetDeviceIDs(NULL, CL_DEVICE_TYPE_GPU, 1, &sinoscope->opencl->device_id, NULL);
+	if (ret != CL_SUCCESS){
+		LOG_ERROR("clGetDeviceIDs failed (%d)", ret);
+		goto fail_exit;
+	}
+
+	ret = sinoscope_opencl_init(sinoscope->opencl, sinoscope->opencl->device_id, sinoscope->width, sinoscope->height);
+	if (ret != 0){
+		LOG_ERROR("sinoscope_opencl_init failed (%d)", ret);
+		goto fail_exit;
+	}
 
 	sinoscope_params_t* params = malloc(sizeof(sinoscope_params_t));
 	// float
@@ -134,33 +152,60 @@ int sinoscope_image_opencl(sinoscope_t* sinoscope) {
 
 
 	// Exécution du kernel OpenCl
-	cl_int ret;
-	ret = clSetKernelArg(sinoscope->opencl->kernel, 0, sizeof(cl_mem),  (void*)&sinoscope->opencl->buffer);
-	if (ret != CL_SUCCESS){
+	
+	cl_mem params_buf = clCreateBuffer(sinoscope->opencl->context,CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,sizeof(sinoscope_params_t),params,&ret);
+	if (ret != CL_SUCCESS) {
+		LOG_ERROR("clCreateBuffer params failed (%d)", ret);
+		goto fail_exit;
+	}
+
+	// Set kernel arguments
+	ret = clSetKernelArg(sinoscope->opencl->kernel, 0, sizeof(cl_mem), &sinoscope->opencl->buffer);
+	if (ret != CL_SUCCESS) {
 		LOG_ERROR("clSetKernelArg 0 failed (%d)", ret);
 		goto fail_exit;
 	}
-	ret = clSetKernelArg(sinoscope->opencl->kernel, 1, sizeof(sinoscope_params_t),  (void*)&params);
-	if (ret != CL_SUCCESS){
+	ret = clSetKernelArg(sinoscope->opencl->kernel, 1, sizeof(cl_mem), &params_buf);
+	if (ret != CL_SUCCESS) {
 		LOG_ERROR("clSetKernelArg 1 failed (%d)", ret);
 		goto fail_exit;
 	}
 
 	// Execute the kernel over the entire range
-	size_t global_work_size[] = { sinoscope->buffer_size };
-	size_t local_work_size[] = { sinoscope->buffer }; 
+	size_t global_work_size[2] = { sinoscope->width, sinoscope->height };
+	size_t local_work_size[2] = { 32,32 };
 
-	ret = clEnqueueNDRangeKernel(sinoscope->opencl->queue, sinoscope->opencl->kernel, 1, NULL, global_work_size, local_work_size, 0, NULL, NULL);
-
-	
+	ret = clEnqueueNDRangeKernel(sinoscope->opencl->queue, sinoscope->opencl->kernel, 2, NULL, global_work_size, local_work_size, 0, NULL, NULL);
 	if (ret != CL_SUCCESS){
 		LOG_ERROR("clEnqueueNDRangeKernel failed (%d)", ret);
 		goto fail_exit;
 	}
+	
+	ret = clFinish(sinoscope->opencl->queue);
+	if (ret != CL_SUCCESS){
+		LOG_ERROR("clFinish failed (%d)", ret);
+		goto fail_exit;
+	}
 
+	// Read the results from the device
+	ret = clEnqueueReadBuffer(sinoscope->opencl->queue, sinoscope->opencl->buffer, CL_TRUE, 0,
+				3 * sinoscope->width * sinoscope->height, sinoscope->buffer, 0, NULL, NULL);
+	if (ret != CL_SUCCESS){
+		LOG_ERROR("clEnqueueReadBuffer failed (%d)", ret);
+		goto fail_exit;
+	}
 
+	sinoscope_opencl_cleanup(sinoscope->opencl);
+
+	if (params_buf != NULL) {
+		clReleaseMemObject(params_buf);
+	}
 	return 0;
 
 fail_exit:
+	sinoscope_opencl_cleanup(sinoscope->opencl);
+	if (params_buf != NULL) {
+		clReleaseMemObject(params_buf);
+	}
     return -1;
 }
