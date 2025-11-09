@@ -77,11 +77,6 @@ int sinoscope_opencl_init(sinoscope_opencl_t* opencl, cl_device_id opencl_device
 		goto fail_exit;
 	}
 
-	printf("OpenCL initialized successfully.\n");
-	printf("Using device ID: %lu\n", (unsigned long)opencl_device_id);
-	int success = (opencl != NULL);
-	printf("OpenCL initialization success: %s\n", success ? "true" : "false");
-
 	return 0;
 
 fail_exit:
@@ -116,22 +111,7 @@ int sinoscope_image_opencl(sinoscope_t* sinoscope) {
         LOG_ERROR_NULL_PTR();
         goto fail_exit;
     }
-	// if (sinoscope->opencl == NULL) {
-    //     LOG_ERROR_NULL_PTR();
-    //     goto fail_exit;
-    // }
-
-	cl_int ret = clGetDeviceIDs(NULL, CL_DEVICE_TYPE_GPU, 1, &sinoscope->opencl->device_id, NULL);
-	if (ret != CL_SUCCESS){
-		LOG_ERROR("clGetDeviceIDs failed (%d)", ret);
-		goto fail_exit;
-	}
-
-	ret = sinoscope_opencl_init(sinoscope->opencl, sinoscope->opencl->device_id, sinoscope->width, sinoscope->height);
-	if (ret != 0){
-		LOG_ERROR("sinoscope_opencl_init failed (%d)", ret);
-		goto fail_exit;
-	}
+	cl_int ret;
 
 	sinoscope_params_t* params = malloc(sizeof(sinoscope_params_t));
 	// float
@@ -149,10 +129,8 @@ int sinoscope_image_opencl(sinoscope_t* sinoscope) {
 	params->taylor = sinoscope->taylor;
 	params->interval = sinoscope->interval;
 
-
-
 	// Exécution du kernel OpenCl
-	
+	// Pas mal certain que ça va créer du overhead mais c'est demandé par l'énoncé
 	cl_mem params_buf = clCreateBuffer(sinoscope->opencl->context,CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,sizeof(sinoscope_params_t),params,&ret);
 	if (ret != CL_SUCCESS) {
 		LOG_ERROR("clCreateBuffer params failed (%d)", ret);
@@ -195,17 +173,18 @@ int sinoscope_image_opencl(sinoscope_t* sinoscope) {
 		goto fail_exit;
 	}
 
-	sinoscope_opencl_cleanup(sinoscope->opencl);
-
+	// Release params buffer
 	if (params_buf != NULL) {
 		clReleaseMemObject(params_buf);
 	}
+
 	return 0;
 
 fail_exit:
-	sinoscope_opencl_cleanup(sinoscope->opencl);
+
 	if (params_buf != NULL) {
 		clReleaseMemObject(params_buf);
 	}
+
     return -1;
 }
