@@ -10,6 +10,27 @@ int heatsim_init(heatsim_t* heatsim, unsigned int dim_x, unsigned int dim_y) {
      *       Le communicateur doit être périodique. Le communicateur
      *       cartésien est périodique en X et Y.
      */
+    
+    // Create a periodical cartesian communicator
+    const int dims[2] = {dim_x,dim_y};
+    const int periods[2] = {1, 1};
+    MPI_Cart_create(MPI_COMM_WORLD,2,dims,periods,0,&heatsim->communicator);
+
+    // Error Handling
+
+    // Setting other parameters in heatsim
+    MPI_Comm_size(heatsim->communicator, &heatsim->rank_count);
+    MPI_Comm_rank(heatsim->communicator, &heatsim->rank);
+    
+    MPI_Cart_shift(heatsim->communicator,0,1,&heatsim->rank_south_peer,&heatsim->rank_north_peer);
+    MPI_Cart_shift(heatsim->communicator,1,1,&heatsim->rank_west_peer, &heatsim->rank_east_peer);
+
+    MPI_Cart_coords(heatsim->communicator,heatsim->rank,2,heatsim->coordinates);
+
+    
+
+
+    return 0;
 
 fail_exit:
     return -1;
@@ -28,6 +49,48 @@ int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
      *
      *       Utilisez `cart2d_get_grid` pour obtenir la `grid` à une coordonnée.
      */
+    int size;
+    int coords[2];
+    unsigned int buffer[3]; 
+    grid_t* grid ;
+    MPI_Comm_size(heatsim->communicator, &size);
+
+    MPI_Datatype grid_data_t;
+
+    // For MPI_Struct
+    int count;
+    int array_of_block_lengths[1]; // Number of elements in the grid
+    MPI_Aint array_of_displacements[1];
+    int array_of_types[1];
+ 
+    for (int rank = 1 ; rank < size ; ++rank){
+
+        MPI_Cart_coords(heatsim->communicator,rank,2,coords);
+        grid = cart2d_get_grid(cart,coords[0],coords[1]);
+
+        buffer[0] = grid->width;
+        buffer[1] = grid->height;
+        buffer[2] = grid->padding;
+
+        MPI_Send(buffer,3,MPI_UNSIGNED,rank,0,heatsim->communicator);
+
+
+        count = 1;
+        array_of_block_lengths[0] = grid->width * grid->height;
+        array_of_displacements[0] = 0;
+        array_of_types[0] = MPI_DOUBLE;
+
+        MPI_Type_create_struct(count, array_of_block_lengths, array_of_displacements, array_of_types, &grid_data_t);
+        MPI_Type_commit(&grid_data_t);
+
+        MPI_Send(grid->data,1,grid_data_t,rank,0,heatsim->communicator);
+
+        MPI_Type_free(&grid_data_t);
+        
+
+    }
+    return 0;
+
 
 fail_exit:
     return -1;
@@ -35,13 +98,30 @@ fail_exit:
 
 grid_t* heatsim_receive_grid(heatsim_t* heatsim) {
     /*
-     * TODO: Recevoir un `grid ` du rang 0. Il est important de noté que
+     * TODO: Recevoir un `grid ` du rang 0. Il est important de noter que
      *       toutes les `grid` ne sont pas nécessairement de la même
      *       dimension (habituellement ±1 en largeur et hauteur). Utilisez
      *       la fonction `grid_create` pour allouer un `grid`.
      *
      *       Utilisez `grid_create` pour allouer le `grid` à retourner.
      */
+    unsigned int buffer[3]; 
+    MPI_Status status;
+    MPI_Recv(buffer,3,MPI_UNSIGNED,0,0,heatsim->communicator,&status);
+    grid_t* grid = grid_create(buffer[0],buffer[1], buffer[2]);
+
+    int count = 1;
+    int array_of_block_lengths[1] = {grid->width * grid->height};
+    MPI_Aint array_of_displacements[1] = {0};
+    int array_of_types[1] = {MPI_DOUBLE};
+    MPI_Datatype grid_data_t;
+
+    MPI_Type_create_struct(count, array_of_block_lengths, array_of_displacements, array_of_types, &grid_data_t);
+    MPI_Type_commit(&grid_data_t);
+    MPI_Recv(grid->data,1,grid_data_t,0,0,heatsim->communicator, &status);
+    MPI_Type_free(&grid_data_t);
+
+    return 0;
 
 fail_exit:
     return NULL;
