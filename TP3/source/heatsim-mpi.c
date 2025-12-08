@@ -1,8 +1,10 @@
 #include <assert.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #include "heatsim.h"
 #include "log.h"
+
 
 int heatsim_init(heatsim_t* heatsim, unsigned int dim_x, unsigned int dim_y) {
     /*
@@ -14,18 +16,47 @@ int heatsim_init(heatsim_t* heatsim, unsigned int dim_x, unsigned int dim_y) {
     // Create a periodical cartesian communicator
     const int dims[2] = {dim_x,dim_y};
     const int periods[2] = {1, 1};
-    MPI_Cart_create(MPI_COMM_WORLD,2,dims,periods,0,&heatsim->communicator);
+
+
+    int ret = MPI_SUCCESS;
+    ret = MPI_Cart_create(MPI_COMM_WORLD,2,dims,periods,0,&heatsim->communicator);
+    if (ret != MPI_SUCCESS) {
+        LOG_ERROR_MPI("MPI_Cart_create failed", ret);
+        goto fail_exit;
+    }
 
     // Error Handling
 
     // Setting other parameters in heatsim
-    MPI_Comm_size(heatsim->communicator, &heatsim->rank_count);
-    MPI_Comm_rank(heatsim->communicator, &heatsim->rank);
-    
-    MPI_Cart_shift(heatsim->communicator,0,1,&heatsim->rank_south_peer,&heatsim->rank_north_peer);
-    MPI_Cart_shift(heatsim->communicator,1,1,&heatsim->rank_west_peer, &heatsim->rank_east_peer);
+    ret = MPI_Comm_size(heatsim->communicator, &heatsim->rank_count);
+    if (ret != MPI_SUCCESS) {
+        LOG_ERROR_MPI("MPI_Comm_size failed", ret);
+        goto fail_exit;
+    }
 
-    MPI_Cart_coords(heatsim->communicator,heatsim->rank,2,heatsim->coordinates);
+    ret = MPI_Comm_rank(heatsim->communicator, &heatsim->rank);
+    if (ret != MPI_SUCCESS) {
+        LOG_ERROR_MPI("MPI_Comm_rank failed", ret);
+        goto fail_exit;
+    }    
+
+    ret = MPI_Cart_shift(heatsim->communicator,0,1,&heatsim->rank_west_peer,&heatsim->rank_east_peer);
+    if (ret != MPI_SUCCESS) {
+        LOG_ERROR_MPI("MPI_Cart_shift failed", ret);
+        goto fail_exit;
+    } 
+
+    ret = MPI_Cart_shift(heatsim->communicator,1,1,&heatsim->rank_north_peer, &heatsim->rank_south_peer);
+    if (ret != MPI_SUCCESS) {
+        LOG_ERROR_MPI("MPI_Cart_shift failed", ret);
+        goto fail_exit;
+    }
+
+    ret = MPI_Cart_coords(heatsim->communicator,heatsim->rank,2,heatsim->coordinates);
+    if (ret != MPI_SUCCESS) {
+        LOG_ERROR_MPI("MPI_Cart_coords failed", ret);
+        goto fail_exit;
+    }
 
     
 
@@ -49,12 +80,10 @@ int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
      *
      *       Utilisez `cart2d_get_grid` pour obtenir la `grid` à une coordonnée.
      */
-    int size;
     int coords[2];
     unsigned int buffer[3]; 
     grid_t* grid ;
-    MPI_Comm_size(heatsim->communicator, &size);
-
+    int ret = MPI_SUCCESS;
     MPI_Datatype grid_data_t;
 
     // For MPI_Struct
@@ -63,7 +92,7 @@ int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
     MPI_Aint array_of_displacements[1];
     int array_of_types[1];
  
-    for (int rank = 1 ; rank < size ; ++rank){
+    for (int rank = 1 ; rank < heatsim->rank_count ; ++rank){
 
         MPI_Cart_coords(heatsim->communicator,rank,2,coords);
         grid = cart2d_get_grid(cart,coords[0],coords[1]);
@@ -72,7 +101,7 @@ int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
         buffer[1] = grid->height;
         buffer[2] = grid->padding;
 
-        MPI_Send(buffer,3,MPI_UNSIGNED,rank,0,heatsim->communicator);
+        ret = MPI_Send(buffer,3,MPI_UNSIGNED,rank,0,heatsim->communicator);
 
 
         count = 1;
@@ -83,7 +112,7 @@ int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
         MPI_Type_create_struct(count, array_of_block_lengths, array_of_displacements, array_of_types, &grid_data_t);
         MPI_Type_commit(&grid_data_t);
 
-        MPI_Send(grid->data,1,grid_data_t,rank,0,heatsim->communicator);
+        ret = MPI_Send(grid->data,1,grid_data_t,rank,0,heatsim->communicator);
 
         MPI_Type_free(&grid_data_t);
         
@@ -105,10 +134,17 @@ grid_t* heatsim_receive_grid(heatsim_t* heatsim) {
      *
      *       Utilisez `grid_create` pour allouer le `grid` à retourner.
      */
-    unsigned int buffer[3]; 
-    MPI_Status status;
-    MPI_Recv(buffer,3,MPI_UNSIGNED,0,0,heatsim->communicator,&status);
+    unsigned int buffer[3];
+    int ret = MPI_SUCCESS;
+
+    ret = MPI_Recv(buffer,3,MPI_UNSIGNED,0,0,heatsim->communicator,MPI_STATUS_IGNORE);
+    if (ret != MPI_SUCCESS) {
+        LOG_ERROR_MPI("MPI_Recv grid failed: ", ret);
+        goto fail_exit;
+    }
+
     grid_t* grid = grid_create(buffer[0],buffer[1], buffer[2]);
+    if (!grid) goto fail_exit;
 
     int count = 1;
     int array_of_block_lengths[1] = {grid->width * grid->height};
@@ -116,12 +152,32 @@ grid_t* heatsim_receive_grid(heatsim_t* heatsim) {
     int array_of_types[1] = {MPI_DOUBLE};
     MPI_Datatype grid_data_t;
 
-    MPI_Type_create_struct(count, array_of_block_lengths, array_of_displacements, array_of_types, &grid_data_t);
-    MPI_Type_commit(&grid_data_t);
-    MPI_Recv(grid->data,1,grid_data_t,0,0,heatsim->communicator, &status);
-    MPI_Type_free(&grid_data_t);
 
-    return 0;
+    ret = MPI_Type_create_struct(count, array_of_block_lengths, array_of_displacements, array_of_types, &grid_data_t);
+    if (ret != MPI_SUCCESS) {
+        LOG_ERROR_MPI("MPI_Type_create_struct failed", ret);
+        goto fail_exit;
+    }
+
+    ret = MPI_Type_commit(&grid_data_t);
+    if (ret != MPI_SUCCESS) {
+        LOG_ERROR_MPI("MPI_Type_commit failed", ret);
+        goto fail_exit;
+    }
+
+    ret = MPI_Recv(grid->data,1,grid_data_t,0,0,heatsim->communicator, MPI_STATUS_IGNORE);
+    if (ret != MPI_SUCCESS) {
+        LOG_ERROR_MPI("MPI_Cart_create failed", ret);
+        goto fail_exit;
+    }
+
+    ret = MPI_Type_free(&grid_data_t);
+    if (ret != MPI_SUCCESS) {
+        LOG_ERROR_MPI("MPI_Type_free failed", ret);
+        goto fail_exit;
+    }
+
+    return grid;
 
 fail_exit:
     return NULL;
@@ -172,10 +228,208 @@ int heatsim_exchange_borders(heatsim_t* heatsim, grid_t* grid) {
      *
      *       Utilisez `grid_get_cell` pour obtenir un pointeur vers une cellule.
      */
+    
+    int north = heatsim->rank_north_peer;
+    int south = heatsim->rank_south_peer;
+    int east = heatsim->rank_east_peer;
+    int west = heatsim->rank_west_peer;
+    int rank = heatsim->rank;
+
+    // To avoid future deadlocks
+    // Even will send first, odd will receive first
+    int parity = (heatsim->coordinates[0] + heatsim->coordinates[1]) & 1;
+
+    MPI_Datatype column_t;
+    int ret = MPI_SUCCESS;
+
+    ret = MPI_Type_vector(grid->height,1,grid->width_padded,MPI_DOUBLE, &column_t);
+    if (ret != MPI_SUCCESS) {
+        LOG_ERROR_MPI("MPI_Type_vector failed", ret);
+        goto fail_exit;
+    }
+
+    ret = MPI_Type_commit(&column_t);
+    if (ret != MPI_SUCCESS) {
+        LOG_ERROR_MPI("MPI_Type_commit failed", ret);
+        goto fail_exit;
+    }
+
+
+    
+    // NORTH AND SOUTH NEIGHBORS :
+
+
+    // handling if no neighbors (one process)
+    if(north == rank && south == rank){
+        // north to south
+        memcpy(grid_get_cell(grid,1,grid->height_padded-1), grid_get_cell(grid,1,1), grid->width * sizeof(double));
+
+        // south to north
+        memcpy(grid_get_cell(grid,1,0), grid_get_cell(grid,1,grid->height_padded-2), grid->width * sizeof(double));
+    }
+    else {
+
+        // Retreiving border cells
+        double* buffer_north = malloc(grid->width * sizeof(double));
+        double* buffer_south = malloc(grid->width * sizeof(double));
+
+        // Interior boundries
+        for (int i = 0; i < grid->width; ++i){
+            buffer_north[i] = *grid_get_cell(grid,i+1,1);
+            buffer_south[i] = *grid_get_cell(grid,i+1, grid->height_padded-2);
+        }
+
+        if (parity){
+            // Send To North
+            ret = MPI_Send(buffer_north,grid->width,MPI_DOUBLE,north,0,heatsim->communicator);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Send North failed: ", ret);
+                goto fail_exit;
+            }
+            free(buffer_north);
+
+            // Send To South
+            ret = MPI_Send(buffer_south,grid->width,MPI_DOUBLE,south,0,heatsim->communicator);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Send South failed: ", ret);
+                goto fail_exit;
+            }
+            free(buffer_south);
+
+            // Receive From South
+            ret = MPI_Recv(grid_get_cell(grid,1,grid->height_padded-1),grid->width,MPI_DOUBLE,south,0,heatsim->communicator,MPI_STATUS_IGNORE);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Recv South failed: ", ret);
+                goto fail_exit;
+            }
+            // Receive From North
+            ret = MPI_Recv(grid_get_cell(grid,1,0),grid->width,MPI_DOUBLE,north,0,heatsim->communicator,MPI_STATUS_IGNORE);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Recv North failed: ", ret);
+                goto fail_exit;
+            }
+
+        }
+        else {
+            // Receive From South
+            ret = MPI_Recv(grid_get_cell(grid,1,grid->height_padded-1),grid->width,MPI_DOUBLE,south,0,heatsim->communicator,MPI_STATUS_IGNORE);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Recv South failed: ", ret);
+                goto fail_exit;
+            }
+            // Receive From North
+            ret = MPI_Recv(grid_get_cell(grid,1,0),grid->width,MPI_DOUBLE,north,0,heatsim->communicator,MPI_STATUS_IGNORE);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Recv North failed: ", ret);
+                goto fail_exit;
+            }
+
+            // Send To North
+            ret = MPI_Send(buffer_north,grid->width,MPI_DOUBLE,north,0,heatsim->communicator);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Send North failed: ", ret);
+                goto fail_exit;
+            }
+            free(buffer_north);
+
+            // Send To South
+            ret = MPI_Send(buffer_south,grid->width,MPI_DOUBLE,south,0,heatsim->communicator);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Send South failed: ", ret);
+                goto fail_exit;
+            }
+            free(buffer_south);
+    
+        }
+    }
+
+
+    // EAST AND WEST NEIGHBORS :
+
+    // handling if no neighbors (one process)
+    if(west == rank && east == rank){
+        
+        for (int i = 0; i < grid->height; ++i){
+            // west to east
+            memcpy(grid_get_cell(grid,grid->width_padded-1,i+1), grid_get_cell(grid,1,i+1), sizeof(double));
+            // east to west
+            memcpy(grid_get_cell(grid,0,i+1), grid_get_cell(grid,grid->width_padded-2,i+1), sizeof(double));
+        }
+    }
+
+    else {
+
+        if (parity){
+
+            // Send To West
+            ret = MPI_Send(grid_get_cell(grid,1,1),1,column_t,heatsim->rank_west_peer,0,heatsim->communicator);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Send West failed: ", ret);
+                goto fail_exit;
+            }
+            // Send To East
+            ret = MPI_Send(grid_get_cell(grid,grid->width_padded-2,1),1,column_t,heatsim->rank_east_peer,0,heatsim->communicator);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Send East failed: ", ret);
+                goto fail_exit;
+            }
+            // Receive From East
+            ret = MPI_Recv(grid_get_cell(grid,grid->width_padded-1,1),grid->height,column_t,heatsim->rank_east_peer,0,heatsim->communicator,MPI_STATUS_IGNORE);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Recv East failed: ", ret);
+                goto fail_exit;
+            }
+            // Receive From West
+            ret = MPI_Recv(grid_get_cell(grid,0,1),grid->height,column_t,heatsim->rank_west_peer,0,heatsim->communicator,MPI_STATUS_IGNORE);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Recv West failed: ", ret);
+                goto fail_exit;
+            }
+
+
+        }
+        else {
+
+            // Receive From East
+            ret = MPI_Recv(grid_get_cell(grid,grid->width_padded-1,1),grid->height,column_t,heatsim->rank_east_peer,0,heatsim->communicator,MPI_STATUS_IGNORE);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Recv East failed: ", ret);
+                goto fail_exit;
+            }            
+            // Receive From West
+            ret = MPI_Recv(grid_get_cell(grid,0,1),grid->height,column_t,heatsim->rank_west_peer,0,heatsim->communicator,MPI_STATUS_IGNORE);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Recv West failed: ", ret);
+                goto fail_exit;
+            }
+
+            // Send To West
+            ret = MPI_Send(grid_get_cell(grid,1,1),1,column_t,heatsim->rank_west_peer,0,heatsim->communicator);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Send West failed: ", ret);
+                goto fail_exit;
+            }
+            // Send To East
+            ret = MPI_Send(grid_get_cell(grid,grid->width_padded-2,1),1,column_t,heatsim->rank_east_peer,0,heatsim->communicator);
+            if (ret != MPI_SUCCESS){
+                LOG_ERROR_MPI("MPI_Send East failed: ", ret);
+                goto fail_exit;
+            }     
+        }
+    }
+
+    ret = MPI_Type_free(&column_t);
+    if (ret != MPI_SUCCESS){
+        LOG_ERROR_MPI("MPI_Type_free failed", ret);
+        goto fail_exit; 
+    }
+
+    return 0;
 
 fail_exit:
     return -1;
 }
+
 
 int heatsim_send_result(heatsim_t* heatsim, grid_t* grid) {
     assert(grid->padding == 0);
@@ -184,6 +438,20 @@ int heatsim_send_result(heatsim_t* heatsim, grid_t* grid) {
      * TODO: Envoyer les données (`data`) du `grid` résultant au rang 0. Le
      *       `grid` n'a aucun rembourage (padding = 0);
      */
+    MPI_Request req;
+    int ret = MPI_SUCCESS;
+    ret = MPI_Isend(grid->data,grid->width * grid->height, MPI_DOUBLE,0,0,heatsim->communicator,&req);
+    if (ret != MPI_SUCCESS){
+        LOG_ERROR_MPI("MPI_Isend failed", ret);
+        goto fail_exit; 
+    }
+
+    ret = MPI_Wait(&req,MPI_STATUS_IGNORE);
+    if (ret != MPI_SUCCESS){
+        LOG_ERROR_MPI("MPI_Wait failed", ret);
+        goto fail_exit; 
+    }
+    return 0;
 
 fail_exit:
     return -1;
@@ -198,6 +466,37 @@ int heatsim_receive_results(heatsim_t* heatsim, cart2d_t* cart) {
      *       qui va recevoir le contenue (`data`) d'un autre noeud.
      */
 
+    int coords[2];
+    grid_t* grid;
+    MPI_Request *reqs = malloc((heatsim->rank_count -1) * sizeof(MPI_Request));
+    int req_id = 0;
+    int ret = MPI_SUCCESS;
+
+    for (int rank = 1 ; rank < heatsim->rank_count ; ++rank){
+        ret = MPI_Cart_coords(heatsim->communicator,rank,2,coords);
+        if (ret != MPI_SUCCESS){
+            LOG_ERROR_MPI("MPI_Cart_coords failed", ret);
+            goto fail_exit; 
+        }
+        grid = cart2d_get_grid(cart,coords[0],coords[1]);
+        ret = MPI_Irecv(grid->data,grid->width * grid->height,MPI_DOUBLE,rank,0,heatsim->communicator,&reqs[req_id]);
+        if (ret != MPI_SUCCESS){
+            LOG_ERROR_MPI("MPI_Irecv failed", ret);
+            goto fail_exit; 
+        }
+        req_id++;
+    }
+
+    ret = MPI_Waitall(heatsim->rank_count - 1 , reqs, MPI_STATUSES_IGNORE);
+    if (ret != MPI_SUCCESS){
+        LOG_ERROR_MPI("MPI_Waitall failed", ret);
+        goto fail_exit; 
+    }
+
+    free(reqs);
+    return 0;
+
 fail_exit:
     return -1;
 }
+
