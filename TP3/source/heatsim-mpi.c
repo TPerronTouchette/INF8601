@@ -90,7 +90,7 @@ int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
     int count;
     int array_of_block_lengths[1]; // Number of elements in the grid
     MPI_Aint array_of_displacements[1];
-    int array_of_types[1];
+    MPI_Datatype array_of_types[1];
  
     for (int rank = 1 ; rank < heatsim->rank_count ; ++rank){
 
@@ -171,7 +171,7 @@ grid_t* heatsim_receive_grid(heatsim_t* heatsim) {
     int count = 1;
     int array_of_block_lengths[1] = {grid->width * grid->height};
     MPI_Aint array_of_displacements[1] = {0};
-    int array_of_types[1] = {MPI_DOUBLE};
+    MPI_Datatype array_of_types[1] = {MPI_DOUBLE};
     MPI_Datatype grid_data_t;
 
 
