@@ -257,9 +257,6 @@ int heatsim_exchange_borders(heatsim_t* heatsim, grid_t* grid) {
     int west = heatsim->rank_west_peer;
     int rank = heatsim->rank;
 
-    printf("[%d] Grid width : %d, height: %d, width_padded: %d, height_padded: %d\n", heatsim->rank,grid->width, grid->height, grid->width_padded, grid->height_padded);
-
-
     MPI_Datatype column_t;
     int ret = MPI_SUCCESS;
 
@@ -301,41 +298,34 @@ int heatsim_exchange_borders(heatsim_t* heatsim, grid_t* grid) {
         }
 
         // Send To North
-        printf("[%d] sending to north\n",heatsim->rank);
         ret = MPI_Send(buffer_north,grid->width,MPI_DOUBLE,north,0,heatsim->communicator);
         if (ret != MPI_SUCCESS){
             LOG_ERROR_MPI("MPI_Send North failed: ", ret);
             goto fail_exit;
         }
-        printf("[%d] sent to north [%d]\n", heatsim->rank,heatsim->rank_north_peer);
         free(buffer_north);
 
         // Send To South
-        printf("[%d] sending to south\n",heatsim->rank);
         ret = MPI_Send(buffer_south,grid->width,MPI_DOUBLE,south,1,heatsim->communicator);
         if (ret != MPI_SUCCESS){
             LOG_ERROR_MPI("MPI_Send South failed: ", ret);
             goto fail_exit;
         }
-        printf("[%d] sent to south [%d]\n",heatsim->rank, heatsim->rank_south_peer);
         free(buffer_south);
 
         // Receive From South
-        printf("[%d] receiving from South\n",heatsim->rank);
         ret = MPI_Recv(grid_get_cell(grid,0,grid->height),grid->width,MPI_DOUBLE,south,0,heatsim->communicator,MPI_STATUS_IGNORE);
         if (ret != MPI_SUCCESS){
             LOG_ERROR_MPI("MPI_Recv South failed: ", ret);
             goto fail_exit;
         }
-        printf("[%d] received from South [%d]\n",heatsim->rank, heatsim->rank_south_peer);
+
         // Receive From North
-        printf("[%d] receiving from North\n",heatsim->rank);
         ret = MPI_Recv(grid_get_cell(grid,0,-1),grid->width,MPI_DOUBLE,north,1,heatsim->communicator,MPI_STATUS_IGNORE);
         if (ret != MPI_SUCCESS){
             LOG_ERROR_MPI("MPI_Recv North failed: ", ret);
             goto fail_exit;
         }
-        printf("[%d] received from North [%d]\n",heatsim->rank, heatsim->rank_north_peer);
 
 
 
