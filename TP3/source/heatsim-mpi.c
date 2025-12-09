@@ -346,13 +346,13 @@ int heatsim_exchange_borders(heatsim_t* heatsim, grid_t* grid) {
             goto fail_exit;
         }
         // Receive From East
-        ret = MPI_Recv(grid_get_cell(grid,-1,0),grid->height,column_t,heatsim->rank_east_peer,2,heatsim->communicator,MPI_STATUS_IGNORE);
+        ret = MPI_Recv(grid_get_cell(grid,grid->width,0),grid->height,column_t,heatsim->rank_east_peer,2,heatsim->communicator,MPI_STATUS_IGNORE);
         if (ret != MPI_SUCCESS){
             LOG_ERROR_MPI("MPI_Recv East failed: ", ret);
             goto fail_exit;
         }
         // Receive From West
-        ret = MPI_Recv(grid_get_cell(grid,grid->width,0),grid->height,column_t,heatsim->rank_west_peer,3,heatsim->communicator,MPI_STATUS_IGNORE);
+        ret = MPI_Recv(grid_get_cell(grid,-1,0),grid->height,column_t,heatsim->rank_west_peer,3,heatsim->communicator,MPI_STATUS_IGNORE);
         if (ret != MPI_SUCCESS){
             LOG_ERROR_MPI("MPI_Recv West failed: ", ret);
             goto fail_exit;
