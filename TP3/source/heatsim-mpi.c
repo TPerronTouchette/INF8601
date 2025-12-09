@@ -94,7 +94,11 @@ int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
  
     for (int rank = 1 ; rank < heatsim->rank_count ; ++rank){
 
-        MPI_Cart_coords(heatsim->communicator,rank,2,coords);
+        ret = MPI_Cart_coords(heatsim->communicator,rank,2,coords);
+        if (ret != MPI_SUCCESS) {
+            LOG_ERROR_MPI("MPI_Cart_coords failed: ", ret);
+            goto fail_exit;
+        }
         grid = cart2d_get_grid(cart,coords[0],coords[1]);
 
         buffer[0] = grid->width;
@@ -102,20 +106,38 @@ int heatsim_send_grids(heatsim_t* heatsim, cart2d_t* cart) {
         buffer[2] = grid->padding;
 
         ret = MPI_Send(buffer,3,MPI_UNSIGNED,rank,0,heatsim->communicator);
-
+        if (ret != MPI_SUCCESS) {
+            LOG_ERROR_MPI("MPI_Send width, height, padding failed: ", ret);
+            goto fail_exit;
+        }
 
         count = 1;
         array_of_block_lengths[0] = grid->width * grid->height;
         array_of_displacements[0] = 0;
         array_of_types[0] = MPI_DOUBLE;
 
-        MPI_Type_create_struct(count, array_of_block_lengths, array_of_displacements, array_of_types, &grid_data_t);
-        MPI_Type_commit(&grid_data_t);
+        ret = MPI_Type_create_struct(count, array_of_block_lengths, array_of_displacements, array_of_types, &grid_data_t);
+        if (ret != MPI_SUCCESS) {
+            LOG_ERROR_MPI("MPI_Type_create_struct failed: ", ret);
+            goto fail_exit;
+        }
+
+        ret = MPI_Type_commit(&grid_data_t);
+        if (ret != MPI_SUCCESS) {
+            LOG_ERROR_MPI("MPI_Type_commit failed: ", ret);
+            goto fail_exit;
+        }
 
         ret = MPI_Send(grid->data,1,grid_data_t,rank,0,heatsim->communicator);
-
-        MPI_Type_free(&grid_data_t);
-        
+        if (ret != MPI_SUCCESS) {
+            LOG_ERROR_MPI("MPI_Send grid data failed: ", ret);
+            goto fail_exit;
+        }
+        ret = MPI_Type_free(&grid_data_t);
+        if (ret != MPI_SUCCESS) {
+            LOG_ERROR_MPI("MPI_Type_free failed: ", ret);
+            goto fail_exit;
+        }
 
     }
     return 0;
@@ -430,11 +452,16 @@ int heatsim_receive_results(heatsim_t* heatsim, cart2d_t* cart) {
         req_id++;
     }
 
-    ret = MPI_Waitall(heatsim->rank_count - 1 , reqs, MPI_STATUSES_IGNORE);
+    // MPI_STATUSES_IGNORE doesn't seem to work
+    MPI_Status *statuses = malloc((heatsim->rank_count - 1)*sizeof(MPI_Status));
+
+    ret = MPI_Waitall(heatsim->rank_count - 1 , reqs, statuses);
     if (ret != MPI_SUCCESS){
         LOG_ERROR_MPI("MPI_Waitall failed", ret);
         goto fail_exit; 
     }
+
+    free(statuses);
 
     free(reqs);
     return 0;
